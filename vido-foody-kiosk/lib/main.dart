@@ -212,7 +212,7 @@ class _KioskHomeState extends State<KioskHome> {
       ],
     });
     final order = Map<String, dynamic>.from(result['order'] ?? {});
-    orderNumber = String(order['id'] ?? 'KIOSK');
+    orderNumber = (order['id'] ?? 'KIOSK').toString();
   }
 
   Future<void> checkoutCard() async {
