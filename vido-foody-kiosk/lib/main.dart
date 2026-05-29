@@ -6,12 +6,14 @@ import 'package:http/http.dart' as http;
 
 void main() => runApp(const VidoFoodyKioskApp());
 
-const brand = Color(0xFFF59E0B);
-const brand2 = Color(0xFFFFCC00);
-const darkBg = Color(0xFF0F172A);
-const panel = Color(0xFF172033);
-const card = Color(0xFF1E293B);
-const border = Color(0xFF334155);
+const brand = Color(0xFFFFCC00);
+const brand2 = Color(0xFFFF9500);
+const brandA = Color(0x2EFFCC00);
+const darkBg = Color(0xFF0F1419);
+const panel = Color(0xFF1A1F26);
+const card = Color(0xFF252A33);
+const cardHover = Color(0xFF2F3540);
+const border = Color(0xFF374151);
 const text = Color(0xFFF8FAFC);
 const muted = Color(0xFF94A3B8);
 const success = Color(0xFF22C55E);
@@ -79,9 +81,9 @@ class CartLine {
   double get total => unit * qty;
   String get optionLabel {
     final parts = <String>[];
-    if (hasDrinkOptions) parts.addAll([size == 'L' ? 'Large' : 'Regular', '$sweetness sweet', '$ice ice']);
+    if (hasDrinkOptions) parts.addAll([size == 'L' ? 'Large' : 'Regular', 'Sugar $sweetness', '$ice ice']);
     if (toppings.isNotEmpty) parts.add(toppings.join(', '));
-    return parts.join(' • ');
+    return parts.join(' · ');
   }
 }
 
@@ -235,6 +237,11 @@ class _KioskHomeState extends State<KioskHome> {
       'tip': selectedTip,
       'total': total,
       'shouldPrint': true,
+      'printRouting': {
+        'customerReceipt': 'receipt_printer',
+        'kitchenTicket': 'kitchen_or_receipt_printer',
+        'drinkLabel': 'label_printer_when_configured',
+      },
       'paymentResult': paymentResult ?? {},
       'items': [
         for (final line in cart)
@@ -266,6 +273,7 @@ class _KioskHomeState extends State<KioskHome> {
       final payment = await payCard();
       final approved = payment['ok'] == true || payment['approved'] == true || (payment['result'] is Map && payment['result']['approved'] == true);
       if (!approved) throw Exception(payment['error'] ?? payment['resultText'] ?? 'Card was declined');
+      if (mounted) setState(() => message = 'Payment approved. Sending order to POS...');
       await sendKioskOrder(paymentStatus: 'paid', paymentMethod: 'card', paymentResult: payment);
       finishOrder();
     } catch (err) {
@@ -389,7 +397,7 @@ class WelcomeScreen extends StatelessWidget {
         width: double.infinity,
         padding: const EdgeInsets.all(48),
         decoration: const BoxDecoration(
-          gradient: LinearGradient(begin: Alignment.topLeft, end: Alignment.bottomRight, colors: [Color(0xFF111827), Color(0xFF172033)]),
+          gradient: LinearGradient(begin: Alignment.topLeft, end: Alignment.bottomRight, colors: [darkBg, panel]),
         ),
         child: Column(
           children: [
@@ -405,7 +413,7 @@ class WelcomeScreen extends StatelessWidget {
               height: 76,
               child: FilledButton(
                 onPressed: onStart,
-                style: FilledButton.styleFrom(backgroundColor: brand2, foregroundColor: Colors.black, shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10))),
+                style: FilledButton.styleFrom(backgroundColor: brand, foregroundColor: Colors.black, shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10))),
                 child: const Text('Start Order', style: TextStyle(fontSize: 26, fontWeight: FontWeight.w900)),
               ),
             ),
@@ -505,7 +513,7 @@ class _MenuPane extends StatelessWidget {
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           Row(children: [
-            Image.asset('assets/vido-foody-logo.png', width: 150, height: 54, fit: BoxFit.contain),
+            Image.asset('assets/vido-foody-logo.png', width: 84, height: 58, fit: BoxFit.contain),
             const SizedBox(width: 20),
             const Expanded(child: Text('Choose Your Favorites', style: TextStyle(fontSize: 30, fontWeight: FontWeight.w900), overflow: TextOverflow.ellipsis)),
           ]),
@@ -517,13 +525,11 @@ class _MenuPane extends StatelessWidget {
               itemBuilder: (_, i) {
                 final cat = categories[i];
                 final selected = cat.id == category;
-                return ChoiceChip(
-                  label: Text('${cat.icon} ${cat.name}', style: const TextStyle(fontSize: 18, fontWeight: FontWeight.w900)),
+                return KioskCategoryPill(
+                  label: cat.name,
+                  icon: cat.icon,
                   selected: selected,
-                  onSelected: (_) => onCategory(cat.id),
-                  selectedColor: brand,
-                  backgroundColor: card,
-                  padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 16),
+                  onTap: () => onCategory(cat.id),
                 );
               },
               separatorBuilder: (_, __) => const SizedBox(width: 12),
@@ -557,24 +563,78 @@ class MenuCard extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return Container(
-      decoration: BoxDecoration(color: panel, borderRadius: BorderRadius.circular(10), border: Border.all(color: border)),
-      padding: const EdgeInsets.all(14),
+      decoration: BoxDecoration(
+        color: card,
+        borderRadius: BorderRadius.circular(16),
+        border: Border.all(color: border),
+      ),
+      padding: const EdgeInsets.all(12),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          Expanded(child: Center(child: Text(item.icon, style: const TextStyle(fontSize: 72)))),
+          Expanded(child: Container(
+            width: double.infinity,
+            decoration: BoxDecoration(
+              color: panel,
+              borderRadius: BorderRadius.circular(12),
+              border: Border.all(color: border),
+            ),
+            child: Center(child: Text(item.icon, style: const TextStyle(fontSize: 72))),
+          )),
+          const SizedBox(height: 10),
           Text(item.name, maxLines: 2, overflow: TextOverflow.ellipsis, style: const TextStyle(fontSize: 20, fontWeight: FontWeight.w900)),
           const SizedBox(height: 6),
-          Row(children: [
-            Text(money(item.price), style: const TextStyle(fontSize: 18, color: brand2, fontWeight: FontWeight.w900)),
-            const Spacer(),
-            FilledButton(
+          Text(money(item.price), style: const TextStyle(fontSize: 18, color: brand, fontWeight: FontWeight.w900)),
+          const SizedBox(height: 8),
+          SizedBox(
+            width: double.infinity,
+            height: 48,
+            child: FilledButton(
               onPressed: () => onAdd(item),
-              style: FilledButton.styleFrom(backgroundColor: brand, foregroundColor: Colors.black, padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 14)),
-              child: const Text('Add', style: TextStyle(fontWeight: FontWeight.w900)),
+              style: FilledButton.styleFrom(backgroundColor: brand, foregroundColor: Colors.black, shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(9))),
+              child: const Text('+ Add', style: TextStyle(fontWeight: FontWeight.w900, fontSize: 16)),
             ),
-          ]),
+          ),
         ],
+      ),
+    );
+  }
+}
+
+class KioskCategoryPill extends StatelessWidget {
+  const KioskCategoryPill({
+    super.key,
+    required this.label,
+    required this.icon,
+    required this.selected,
+    required this.onTap,
+  });
+  final String label;
+  final String icon;
+  final bool selected;
+  final VoidCallback onTap;
+
+  @override
+  Widget build(BuildContext context) {
+    return InkWell(
+      onTap: onTap,
+      borderRadius: BorderRadius.circular(999),
+      child: Container(
+        padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 12),
+        decoration: BoxDecoration(
+          color: selected ? brandA : card,
+          borderRadius: BorderRadius.circular(999),
+          border: Border.all(color: selected ? brand : border),
+        ),
+        child: Row(mainAxisSize: MainAxisSize.min, children: [
+          Text(icon, style: const TextStyle(fontSize: 19)),
+          const SizedBox(width: 10),
+          Text(label, style: TextStyle(
+            color: selected ? brand : text,
+            fontSize: 18,
+            fontWeight: FontWeight.w900,
+          )),
+        ]),
       ),
     );
   }
@@ -653,9 +713,10 @@ class _ProductOptionsSheetState extends State<ProductOptionsSheet> {
                   FilterChip(
                     label: Text('${entry.key} +${money(entry.value)}', style: const TextStyle(fontWeight: FontWeight.w900)),
                     selected: selectedToppings.contains(entry.key),
-                    selectedColor: brand,
+                    selectedColor: brandA,
                     backgroundColor: card,
-                    checkmarkColor: Colors.black,
+                    checkmarkColor: brand,
+                    side: BorderSide(color: selectedToppings.contains(entry.key) ? brand : border),
                     onSelected: (value) => setState(() {
                       if (value) {
                         selectedToppings.add(entry.key);
@@ -671,7 +732,7 @@ class _ProductOptionsSheetState extends State<ProductOptionsSheet> {
                 height: 64,
                 child: FilledButton(
                   onPressed: addToOrder,
-                  style: FilledButton.styleFrom(backgroundColor: brand2, foregroundColor: Colors.black, shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8))),
+                  style: FilledButton.styleFrom(backgroundColor: brand, foregroundColor: Colors.black, shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8))),
                   child: Text('Add to Order - ${money(unitPrice)}', style: const TextStyle(fontSize: 20, fontWeight: FontWeight.w900)),
                 ),
               ),
@@ -804,7 +865,7 @@ class CartPanel extends StatelessWidget {
             height: compact ? 58 : 64,
             child: FilledButton(
               onPressed: onCheckout,
-              style: FilledButton.styleFrom(backgroundColor: brand2, foregroundColor: Colors.black, shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8))),
+              style: FilledButton.styleFrom(backgroundColor: brand, foregroundColor: Colors.black, shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8))),
               child: Text('Checkout', style: TextStyle(fontSize: compact ? 20 : 22, fontWeight: FontWeight.w900)),
             ),
           ),
@@ -897,6 +958,11 @@ class CheckoutScreen extends StatelessWidget {
             const SizedBox(height: 14),
           ],
           PayButton(label: 'Pay Now', icon: Icons.credit_card, onTap: onCard),
+          const SizedBox(height: 10),
+          const Text(
+            'After payment, this kiosk sends the paid order to POS for customer receipt, kitchen ticket, and drink label printing.',
+            style: TextStyle(color: muted, fontWeight: FontWeight.w800, height: 1.35),
+          ),
         ],
       ),
     );
@@ -951,7 +1017,7 @@ class PayButton extends StatelessWidget {
         icon: Icon(icon),
         label: Text(label, style: const TextStyle(fontSize: 22, fontWeight: FontWeight.w900)),
         style: FilledButton.styleFrom(
-          backgroundColor: secondary ? card : brand2,
+          backgroundColor: secondary ? card : brand,
           foregroundColor: secondary ? text : Colors.black,
           shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
         ),
@@ -980,7 +1046,7 @@ class DoneScreen extends StatelessWidget {
             const SizedBox(height: 24),
             const Text('Thank you!', style: TextStyle(fontSize: 44, fontWeight: FontWeight.w900)),
             const SizedBox(height: 12),
-            Text('Your order was sent to the kitchen.', style: TextStyle(fontSize: 22, color: muted, fontWeight: FontWeight.w800)),
+            Text('Paid order sent to POS. Receipt, kitchen ticket, and drink label will print based on store settings.', textAlign: TextAlign.center, style: TextStyle(fontSize: 22, color: muted, fontWeight: FontWeight.w800)),
             const SizedBox(height: 28),
             Container(
               padding: const EdgeInsets.symmetric(horizontal: 32, vertical: 22),
