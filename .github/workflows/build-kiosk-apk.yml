@@ -1,0 +1,43 @@
+name: Build Vido Foody Kiosk APK
+
+on:
+  push:
+    branches: [ main ]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build-kiosk-apk:
+    name: Build Kiosk APK
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+
+      - name: Create Flutter platform files if needed
+        working-directory: vido-foody-kiosk
+        run: flutter create .
+
+      - name: Install Flutter dependencies
+        working-directory: vido-foody-kiosk
+        run: flutter pub get
+
+      - name: Analyze Flutter kiosk app
+        working-directory: vido-foody-kiosk
+        run: flutter analyze
+
+      - name: Build Android Kiosk APK
+        working-directory: vido-foody-kiosk
+        run: flutter build apk --debug
+
+      - name: Upload Kiosk APK
+        uses: actions/upload-artifact@v5
+        with:
+          name: vido-foody-kiosk-debug-apk
+          path: vido-foody-kiosk/build/app/outputs/flutter-apk/app-debug.apk
+          retention-days: 30
