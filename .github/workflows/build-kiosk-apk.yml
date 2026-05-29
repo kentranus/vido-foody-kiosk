@@ -2,7 +2,7 @@ name: Build Vido Foody Kiosk APK
 
 on:
   push:
-    branches: [ main ]
+    branches: [ main, master ]
   workflow_dispatch:
 
 permissions:
@@ -40,7 +40,7 @@ jobs:
         run: flutter build apk --debug
 
       - name: Upload Kiosk APK
-        uses: actions/upload-artifact@v5
+        uses: actions/upload-artifact@v6
         with:
           name: vido-foody-kiosk-debug-apk
           path: vido-foody-kiosk/build/app/outputs/flutter-apk/app-debug.apk
