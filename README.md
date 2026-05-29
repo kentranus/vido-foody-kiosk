@@ -1,14 +1,15 @@
-# Vido Foody Kiosk App - Final Options Build
+# Vido Foody Kiosk - Final
 
-Flutter kiosk app for customer self-ordering.
+This package is the separate Vido Foody Kiosk Flutter app.
 
-This package includes the updated kiosk item flow:
+Features included:
+- Portrait and landscape responsive kiosk layout.
+- Pay Now flow for kiosk card payment.
+- Tip selection on the kiosk screen before payment.
+- Product option/topping sheet before adding drinks to the order.
+- Cart line display with selected options.
+- Receipt phone entry after payment.
+- Sends paid kiosk orders to the POS backend through `/api/kiosk/orders`.
+- Uses the Vido Foody logo asset.
 
-- Tap item opens option sheet
-- Size, sweetness, ice, and toppings
-- Add to Order button
-- Cart shows selected options under each item
-- Pay Now card flow
-- Receipt phone screen after payment
-
-Upload the contents of this folder to the kiosk GitHub repo root.
+Upload this package to a separate kiosk GitHub repo if you want a separate Kiosk APK. If you keep POS and Kiosk in one repo, make sure the workflow paths match the folder names.
