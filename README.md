@@ -1,36 +1,14 @@
-# Vido Foody Kiosk App
+# Vido Foody Kiosk App - Final Options Build
 
-Separate Flutter kiosk app package for customer self-order.
+Flutter kiosk app for customer self-ordering.
 
-## Folders
+This package includes the updated kiosk item flow:
 
-- `vido-foody-kiosk/` - Flutter Android kiosk app.
-- `docs/` - Platform and PAX/POSLink notes.
-- `.github/workflows/` - GitHub Actions workflow to build the kiosk APK.
+- Tap item opens option sheet
+- Size, sweetness, ice, and toppings
+- Add to Order button
+- Cart shows selected options under each item
+- Pay Now card flow
+- Receipt phone screen after payment
 
-## Build Kiosk APK On GitHub
-
-Upload this whole folder to a GitHub repo. Then open:
-
-```text
-Actions -> Build Vido Foody Kiosk APK -> Run workflow
-```
-
-The APK will be in the workflow artifact:
-
-```text
-vido-foody-kiosk-debug-apk
-```
-
-## Local Run
-
-```bash
-cd vido-foody-kiosk
-flutter create .
-flutter pub get
-flutter run
-```
-
-## Kiosk Settings
-
-The kiosk app supports portrait standing kiosks and landscape kiosks. The POS app should manage kiosk device/payment settings centrally. Each kiosk uses its own `Device ID` and assigned PAX terminal.
+Upload the contents of this folder to the kiosk GitHub repo root.
