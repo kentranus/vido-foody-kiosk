@@ -63,7 +63,7 @@ class CartLine {
   CartLine(
     this.item, {
     this.qty = 1,
-    this.size = 'R',
+    this.size = 'M',
     this.sweetness = '100%',
     this.ice = 'Regular',
     this.toppings = const [],
@@ -77,11 +77,16 @@ class CartLine {
   String get key => '${item.id}|$size|$sweetness|$ice|${toppings.join(',')}';
   bool get hasDrinkOptions => item.category != 'snack';
   double get toppingsTotal => toppings.fold(0, (sum, topping) => sum + (toppingPrices[topping] ?? 0));
-  double get unit => item.price + (size == 'L' ? 0.75 : 0) + toppingsTotal;
+  double get sizePrice => switch (size) {
+        'S' => -0.50,
+        'L' => 1.00,
+        _ => 0.00,
+      };
+  double get unit => item.price + sizePrice + toppingsTotal;
   double get total => unit * qty;
   String get optionLabel {
     final parts = <String>[];
-    if (hasDrinkOptions) parts.addAll([size == 'L' ? 'Large' : 'Regular', 'Sugar $sweetness', '$ice ice']);
+    if (hasDrinkOptions) parts.addAll([size, 'Sugar $sweetness']);
     if (toppings.isNotEmpty) parts.add(toppings.join(', '));
     return parts.join(' · ');
   }
@@ -91,11 +96,12 @@ const toppingPrices = {
   'Boba': 0.75,
   'Crystal Boba': 0.85,
   'Pudding': 0.75,
-  'Coffee Jelly': 0.75,
-  'Cheese Foam': 1.00,
+  'Less Ice': 0.00,
+  'No Ice': 0.00,
+  'Extra Sweet': 0.00,
 };
 
-const categories = [
+const fallbackCategories = [
   MenuCategory('milk-tea', 'Milk Tea', '🧋'),
   MenuCategory('fruit-tea', 'Fruit Tea', '🍑'),
   MenuCategory('coffee', 'Coffee', '☕'),
@@ -103,7 +109,7 @@ const categories = [
   MenuCategory('snack', 'Snacks', '🥐'),
 ];
 
-const menu = [
+const fallbackMenu = [
   MenuItemData('classic', 'milk-tea', 'Classic Milk Tea', 5.50, '🧋'),
   MenuItemData('brown-sugar', 'milk-tea', 'Brown Sugar Boba', 6.75, '🧋', popular: true),
   MenuItemData('oolong', 'milk-tea', 'Oolong Milk Tea', 5.75, '🧋'),
@@ -122,7 +128,7 @@ const menu = [
   MenuItemData('mochi', 'snack', 'Mochi (3 pcs)', 4.25, '🍡'),
 ];
 
-enum KioskStep { welcome, ordering, checkout, done }
+enum KioskStep { ordering, checkout, done }
 
 class VidoFoodyKioskApp extends StatelessWidget {
   const VidoFoodyKioskApp({super.key});
@@ -154,7 +160,9 @@ class _KioskHomeState extends State<KioskHome> {
   static const platform = MethodChannel('vido.foody/poslink');
   final settings = KioskSettings();
   final cart = <CartLine>[];
-  KioskStep step = KioskStep.welcome;
+  List<MenuCategory> menuCategories = List<MenuCategory>.from(fallbackCategories);
+  List<MenuItemData> menuItems = List<MenuItemData>.from(fallbackMenu);
+  KioskStep step = KioskStep.ordering;
   String category = 'milk-tea';
   bool busy = false;
   String orderNumber = '';
@@ -168,6 +176,12 @@ class _KioskHomeState extends State<KioskHome> {
   double get totalBeforeTip => subtotal + tax;
   double get total => totalBeforeTip + selectedTip;
 
+  @override
+  void initState() {
+    super.initState();
+    syncMenuFromPos();
+  }
+
   Future<Map<String, dynamic>> post(String path, Map<String, dynamic> body) async {
     final res = await http.post(
       Uri.parse('${settings.backendUrl}$path'),
@@ -177,6 +191,50 @@ class _KioskHomeState extends State<KioskHome> {
     final data = res.body.isEmpty ? <String, dynamic>{} : jsonDecode(res.body) as Map<String, dynamic>;
     if (res.statusCode >= 400) throw Exception(data['error'] ?? 'Request failed');
     return data;
+  }
+
+  Future<void> syncMenuFromPos() async {
+    try {
+      final res = await http.get(Uri.parse('${settings.backendUrl}/api/menu'))
+          .timeout(const Duration(seconds: 5));
+      final data = res.body.isEmpty ? <String, dynamic>{} : jsonDecode(res.body) as Map<String, dynamic>;
+      final payload = Map<String, dynamic>.from(data['menu'] ?? {});
+      final rawCategories = (payload['categories'] as List? ?? const []);
+      final rawItems = (payload['items'] as List? ?? const []);
+      final loadedItems = rawItems
+          .map((raw) {
+            final item = Map<String, dynamic>.from(raw as Map);
+            return MenuItemData(
+              '${item['id']}',
+              '${item['category']}',
+              '${item['name']}',
+              num.tryParse('${item['price']}')?.toDouble() ?? 0,
+              '${item['icon'] ?? '•'}',
+              popular: item['popular'] == true,
+            );
+          })
+          .where((item) => item.category != 'topping' && item.price > 0)
+          .toList();
+      final visibleCategoryIds = loadedItems.map((item) => item.category).toSet();
+      final loadedCategories = rawCategories.map((raw) {
+        final item = Map<String, dynamic>.from(raw as Map);
+        return MenuCategory(
+          '${item['id']}',
+          '${item['name']}',
+          '${item['icon'] ?? '•'}',
+        );
+      }).where((cat) => visibleCategoryIds.contains(cat.id)).toList();
+      if (!mounted || loadedCategories.isEmpty || loadedItems.isEmpty) return;
+      setState(() {
+        menuCategories = loadedCategories;
+        menuItems = loadedItems;
+        if (!menuCategories.any((cat) => cat.id == category)) {
+          category = menuCategories.first.id;
+        }
+      });
+    } catch (_) {
+      // Keep bundled menu for offline kiosk/demo mode.
+    }
   }
 
   Future<void> addItem(MenuItemData item) async {
@@ -315,7 +373,7 @@ class _KioskHomeState extends State<KioskHome> {
       message = '';
       receiptMessage = '';
       selectedTip = 0;
-      step = KioskStep.welcome;
+      step = KioskStep.ordering;
     });
   }
 
@@ -348,9 +406,10 @@ class _KioskHomeState extends State<KioskHome> {
     return Scaffold(
       body: SafeArea(
         child: switch (step) {
-          KioskStep.welcome => WelcomeScreen(onStart: () => setState(() => step = KioskStep.ordering), onSettings: openSettings),
           KioskStep.ordering => OrderingScreen(
               category: category,
+              categories: menuCategories,
+              menuItems: menuItems,
               cart: cart,
               subtotal: subtotal,
               tax: tax,
@@ -364,6 +423,7 @@ class _KioskHomeState extends State<KioskHome> {
               onSize: (line, size) => setState(() => line.size = size),
               onCheckout: cart.isEmpty ? null : () => setState(() => step = KioskStep.checkout),
               onCancel: reset,
+              onSettings: openSettings,
             ),
           KioskStep.checkout => CheckoutScreen(
               total: total,
@@ -429,6 +489,8 @@ class OrderingScreen extends StatelessWidget {
   const OrderingScreen({
     super.key,
     required this.category,
+    required this.categories,
+    required this.menuItems,
     required this.cart,
     required this.subtotal,
     required this.tax,
@@ -439,9 +501,12 @@ class OrderingScreen extends StatelessWidget {
     required this.onSize,
     required this.onCheckout,
     required this.onCancel,
+    required this.onSettings,
   });
 
   final String category;
+  final List<MenuCategory> categories;
+  final List<MenuItemData> menuItems;
   final List<CartLine> cart;
   final double subtotal;
   final double tax;
@@ -452,6 +517,7 @@ class OrderingScreen extends StatelessWidget {
   final void Function(CartLine line, String size) onSize;
   final VoidCallback? onCheckout;
   final VoidCallback onCancel;
+  final VoidCallback onSettings;
 
   @override
   Widget build(BuildContext context) {
@@ -461,9 +527,12 @@ class OrderingScreen extends StatelessWidget {
       final columns = menuWidth < 620 ? 2 : (menuWidth < 1120 ? 3 : 4);
       final menuPane = _MenuPane(
         category: category,
+        categories: categories,
+        menuItems: menuItems,
         columns: columns,
         onCategory: onCategory,
         onAdd: onAdd,
+        onSettings: onSettings,
       );
       final cartPane = CartPanel(
         cart: cart,
@@ -497,16 +566,27 @@ class OrderingScreen extends StatelessWidget {
 }
 
 class _MenuPane extends StatelessWidget {
-  const _MenuPane({required this.category, required this.columns, required this.onCategory, required this.onAdd});
+  const _MenuPane({
+    required this.category,
+    required this.categories,
+    required this.menuItems,
+    required this.columns,
+    required this.onCategory,
+    required this.onAdd,
+    required this.onSettings,
+  });
 
   final String category;
+  final List<MenuCategory> categories;
+  final List<MenuItemData> menuItems;
   final int columns;
   final ValueChanged<String> onCategory;
   final Future<void> Function(MenuItemData item) onAdd;
+  final VoidCallback onSettings;
 
   @override
   Widget build(BuildContext context) {
-    final items = menu.where((item) => item.category == category).toList();
+    final items = menuItems.where((item) => item.category == category).toList();
     return Padding(
       padding: const EdgeInsets.all(22),
       child: Column(
@@ -516,6 +596,11 @@ class _MenuPane extends StatelessWidget {
             Image.asset('assets/vido-foody-logo.png', width: 84, height: 58, fit: BoxFit.contain),
             const SizedBox(width: 20),
             const Expanded(child: Text('Choose Your Favorites', style: TextStyle(fontSize: 30, fontWeight: FontWeight.w900), overflow: TextOverflow.ellipsis)),
+            IconButton(
+              onPressed: onSettings,
+              tooltip: 'Kiosk settings',
+              icon: const Icon(Icons.settings, color: muted),
+            ),
           ]),
           const SizedBox(height: 16),
           SizedBox(
@@ -562,40 +647,49 @@ class MenuCard extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return Container(
-      decoration: BoxDecoration(
-        color: card,
-        borderRadius: BorderRadius.circular(16),
-        border: Border.all(color: border),
-      ),
-      padding: const EdgeInsets.all(12),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Expanded(child: Container(
-            width: double.infinity,
-            decoration: BoxDecoration(
-              color: panel,
-              borderRadius: BorderRadius.circular(12),
-              border: Border.all(color: border),
-            ),
-            child: Center(child: Text(item.icon, style: const TextStyle(fontSize: 72))),
-          )),
-          const SizedBox(height: 10),
-          Text(item.name, maxLines: 2, overflow: TextOverflow.ellipsis, style: const TextStyle(fontSize: 20, fontWeight: FontWeight.w900)),
-          const SizedBox(height: 6),
-          Text(money(item.price), style: const TextStyle(fontSize: 18, color: brand, fontWeight: FontWeight.w900)),
-          const SizedBox(height: 8),
-          SizedBox(
-            width: double.infinity,
-            height: 48,
-            child: FilledButton(
-              onPressed: () => onAdd(item),
-              style: FilledButton.styleFrom(backgroundColor: brand, foregroundColor: Colors.black, shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(9))),
-              child: const Text('+ Add', style: TextStyle(fontWeight: FontWeight.w900, fontSize: 16)),
-            ),
+    return Material(
+      color: card,
+      borderRadius: BorderRadius.circular(16),
+      clipBehavior: Clip.antiAlias,
+      child: InkWell(
+        onTap: () => onAdd(item),
+        splashColor: brandA,
+        highlightColor: brandA,
+        child: Ink(
+          decoration: BoxDecoration(
+            borderRadius: BorderRadius.circular(16),
+            border: Border.all(color: border),
           ),
-        ],
+          padding: const EdgeInsets.all(12),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Expanded(child: Container(
+                width: double.infinity,
+                decoration: BoxDecoration(
+                  color: panel,
+                  borderRadius: BorderRadius.circular(12),
+                  border: Border.all(color: border),
+                ),
+                child: Center(child: Text(item.icon, style: const TextStyle(fontSize: 72))),
+              )),
+              const SizedBox(height: 10),
+              Text(item.name, maxLines: 2, overflow: TextOverflow.ellipsis, style: const TextStyle(fontSize: 20, fontWeight: FontWeight.w900)),
+              const SizedBox(height: 6),
+              Text(money(item.price), style: const TextStyle(fontSize: 18, color: brand, fontWeight: FontWeight.w900)),
+              const SizedBox(height: 8),
+              SizedBox(
+                width: double.infinity,
+                height: 48,
+                child: FilledButton(
+                  onPressed: () => onAdd(item),
+                  style: FilledButton.styleFrom(backgroundColor: brand, foregroundColor: Colors.black, shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(9))),
+                  child: const Text('+ Add', style: TextStyle(fontWeight: FontWeight.w900, fontSize: 16)),
+                ),
+              ),
+            ],
+          ),
+        ),
       ),
     );
   }
@@ -616,21 +710,21 @@ class KioskCategoryPill extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return InkWell(
-      onTap: onTap,
-      borderRadius: BorderRadius.circular(999),
-      child: Container(
-        padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 12),
-        decoration: BoxDecoration(
-          color: selected ? brandA : card,
-          borderRadius: BorderRadius.circular(999),
-          border: Border.all(color: selected ? brand : border),
+    return SizedBox(
+      height: 60,
+      child: OutlinedButton(
+        onPressed: onTap,
+        style: OutlinedButton.styleFrom(
+          backgroundColor: selected ? brand : card,
+          foregroundColor: selected ? Colors.black : text,
+          side: BorderSide(color: selected ? brand : border, width: selected ? 2 : 1),
+          padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 12),
+          shape: const StadiumBorder(),
         ),
         child: Row(mainAxisSize: MainAxisSize.min, children: [
           Text(icon, style: const TextStyle(fontSize: 19)),
           const SizedBox(width: 10),
-          Text(label, style: TextStyle(
-            color: selected ? brand : text,
+          Text(label, style: const TextStyle(
             fontSize: 18,
             fontWeight: FontWeight.w900,
           )),
@@ -649,14 +743,19 @@ class ProductOptionsSheet extends StatefulWidget {
 }
 
 class _ProductOptionsSheetState extends State<ProductOptionsSheet> {
-  String size = 'R';
+  String size = 'M';
   String sweetness = '100%';
   String ice = 'Regular';
   final selectedToppings = <String>{};
 
   double get unitPrice {
     final toppingsTotal = selectedToppings.fold<double>(0, (sum, topping) => sum + (toppingPrices[topping] ?? 0));
-    return widget.item.price + (size == 'L' ? 0.75 : 0) + toppingsTotal;
+    final sizePrice = switch (size) {
+      'S' => -0.50,
+      'L' => 1.00,
+      _ => 0.00,
+    };
+    return widget.item.price + sizePrice + toppingsTotal;
   }
 
   void addToOrder() {
@@ -691,23 +790,18 @@ class _ProductOptionsSheetState extends State<ProductOptionsSheet> {
               const SizedBox(height: 18),
               const OptionTitle('Size'),
               Wrap(spacing: 10, runSpacing: 10, children: [
-                OptionChip(label: 'Regular', selected: size == 'R', onTap: () => setState(() => size = 'R')),
-                OptionChip(label: 'Large +\$0.75', selected: size == 'L', onTap: () => setState(() => size = 'L')),
+                OptionChip(label: 'S -\$0.50', selected: size == 'S', onTap: () => setState(() => size = 'S')),
+                OptionChip(label: 'M Included', selected: size == 'M', onTap: () => setState(() => size = 'M')),
+                OptionChip(label: 'L +\$1.00', selected: size == 'L', onTap: () => setState(() => size = 'L')),
               ]),
               const SizedBox(height: 18),
-              const OptionTitle('Sweetness'),
+              const OptionTitle('Sugar'),
               Wrap(spacing: 10, runSpacing: 10, children: [
                 for (final value in const ['0%', '25%', '50%', '75%', '100%'])
                   OptionChip(label: value, selected: sweetness == value, onTap: () => setState(() => sweetness = value)),
               ]),
               const SizedBox(height: 18),
-              const OptionTitle('Ice'),
-              Wrap(spacing: 10, runSpacing: 10, children: [
-                for (final value in const ['No', 'Light', 'Regular', 'Extra'])
-                  OptionChip(label: value, selected: ice == value, onTap: () => setState(() => ice = value)),
-              ]),
-              const SizedBox(height: 18),
-              const OptionTitle('Toppings'),
+              const OptionTitle('Toppings & Add-ons'),
               Wrap(spacing: 10, runSpacing: 10, children: [
                 for (final entry in toppingPrices.entries)
                   FilterChip(
@@ -839,7 +933,11 @@ class CartPanel extends StatelessWidget {
                           Row(children: [
                             if (line.hasDrinkOptions)
                               SegmentedButton<String>(
-                                segments: const [ButtonSegment(value: 'R', label: Text('Reg')), ButtonSegment(value: 'L', label: Text('Large'))],
+                                segments: const [
+                                  ButtonSegment(value: 'S', label: Text('S')),
+                                  ButtonSegment(value: 'M', label: Text('M')),
+                                  ButtonSegment(value: 'L', label: Text('L')),
+                                ],
                                 selected: {line.size},
                                 onSelectionChanged: (v) => onSize(line, v.first),
                               ),
