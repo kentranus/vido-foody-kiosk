@@ -1,0 +1,112 @@
+name: Build Vido Foody Kiosk APK
+
+on:
+  push:
+    branches: [ main ]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build-apk:
+    name: Build Android APK
+    runs-on: ubuntu-latest
+    env:
+      FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+      APP_MODE: kiosk
+      VITE_APP_MODE: kiosk
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: actions/setup-node@v5
+        with:
+          node-version: '24'
+          package-manager-cache: false
+
+      - uses: actions/setup-java@v5
+        with:
+          distribution: 'temurin'
+          java-version: '17'
+
+      - uses: android-actions/setup-android@v4
+
+      - name: Inject build metadata
+        working-directory: tablet-app/src
+        run: |
+          BUILD_DATE=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
+          COMMIT_SHA="${{ github.sha }}"
+          COMMIT_SHORT="${COMMIT_SHA:0:7}"
+          BUILD_NUMBER="${{ github.run_number }}"
+          sed -i "s|__BUILD_DATE__|$BUILD_DATE|g" version.js
+          sed -i "s|__COMMIT_SHA__|$COMMIT_SHA|g" version.js
+          sed -i "s|__COMMIT_SHORT__|$COMMIT_SHORT|g" version.js
+          sed -i "s|__BUILD_NUMBER__|$BUILD_NUMBER|g" version.js
+
+      - name: Install dependencies
+        working-directory: tablet-app
+        run: npm install --legacy-peer-deps
+
+      - name: Ensure TypeScript
+        working-directory: tablet-app
+        run: npm install --save-dev typescript@^5.4.5 --legacy-peer-deps
+
+      - name: Build web bundle (for APK wrapper)
+        working-directory: tablet-app
+        run: npm run build
+
+      - name: Add Android platform
+        working-directory: tablet-app
+        run: npx cap add android
+
+      - name: Sync Capacitor
+        working-directory: tablet-app
+        run: npx cap sync android
+
+      - name: Install TcpSocket plugin
+        working-directory: tablet-app
+        run: |
+          PKG_DIR="android/app/src/main/java/com/vido/foody"
+          mkdir -p "$PKG_DIR"
+          cp android-plugin/TcpSocketPlugin.java "$PKG_DIR/"
+          cp android-plugin/CashDrawerPlugin.java "$PKG_DIR/"
+          cp android-plugin/PosLinkPaymentPlugin.java "$PKG_DIR/"
+          cp android-plugin/CustomerDisplayPlugin.java "$PKG_DIR/"
+          cp android-plugin/MainActivity.java "$PKG_DIR/"
+
+      - name: Install POSLink Android SDK
+        working-directory: tablet-app
+        run: |
+          mkdir -p android/app/libAars
+          cp android-libs/poslink/* android/app/libAars/
+          node scripts/configure-poslink-android.mjs
+
+      - name: Copy network security config
+        working-directory: tablet-app
+        run: |
+          mkdir -p android/app/src/main/res/xml
+          cp android-config/network_security_config.xml android/app/src/main/res/xml/
+
+      - name: Build APK
+        working-directory: tablet-app/android
+        run: |
+          chmod +x ./gradlew
+          ./gradlew assembleDebug --stacktrace
+
+      - name: Rename APK
+        run: cp tablet-app/android/app/build/outputs/apk/debug/app-debug.apk vido-foody-kiosk-build-${{ github.run_number }}.apk
+
+      - name: Upload APK
+        uses: actions/upload-artifact@v5
+        with:
+          name: vido-foody-kiosk-apk-build-${{ github.run_number }}
+          path: vido-foody-kiosk-build-${{ github.run_number }}.apk
+          retention-days: 30
+
+      - name: Upload build logs on failure
+        if: failure()
+        uses: actions/upload-artifact@v5
+        with:
+          name: build-logs
+          path: tablet-app/android/app/build/reports/
+          retention-days: 7
