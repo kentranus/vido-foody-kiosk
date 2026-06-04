@@ -10,7 +10,7 @@ permissions:
 
 jobs:
   build-apk:
-    name: Build Android APK
+    name: Build Android Kiosk APK
     runs-on: ubuntu-latest
     env:
       FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
@@ -66,13 +66,14 @@ jobs:
       - name: Install TcpSocket plugin
         working-directory: tablet-app
         run: |
-          PKG_DIR="android/app/src/main/java/com/vido/foody"
+          PKG_DIR="android/app/src/main/java/com/vido/foody/kiosk"
           mkdir -p "$PKG_DIR"
           cp android-plugin/TcpSocketPlugin.java "$PKG_DIR/"
           cp android-plugin/CashDrawerPlugin.java "$PKG_DIR/"
           cp android-plugin/PosLinkPaymentPlugin.java "$PKG_DIR/"
           cp android-plugin/CustomerDisplayPlugin.java "$PKG_DIR/"
           cp android-plugin/MainActivity.java "$PKG_DIR/"
+          sed -i 's/package com.vido.foody;/package com.vido.foody.kiosk;/g' "$PKG_DIR"/*.java
 
       - name: Install POSLink Android SDK
         working-directory: tablet-app
