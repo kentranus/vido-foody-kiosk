@@ -53,7 +53,7 @@ jobs:
 
       - name: Build web bundle (for APK wrapper)
         working-directory: tablet-app
-        run: npm run build
+        run: VITE_APP_MODE=kiosk npm run build
 
       - name: Add Android platform
         working-directory: tablet-app

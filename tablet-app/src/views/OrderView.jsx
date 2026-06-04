@@ -1,7 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import {
   Plus, Minus, Search, Tag, FileText, DollarSign, CreditCard, Smartphone,
-  ArrowLeft, X, Check, AlertCircle, RefreshCw, Archive,
+  ArrowLeft, X, Check, AlertCircle, RefreshCw, Archive, Settings,
 } from 'lucide-react';
 import { C } from '../theme';
 import { SHOP, ORDER_TYPES, formatUSD, formatTime } from '../config';
@@ -376,6 +376,7 @@ export function KioskOrderView({ menu, categories, staff }) {
   const [customizing, setCustomizing] = useState(null);
   const [payOpen, setPayOpen] = useState(false);
   const [doneOrder, setDoneOrder] = useState(null);
+  const [settingsOpen, setSettingsOpen] = useState(false);
 
   const visibleMenu = menu.filter(m => {
     if (m.isAddon) return false;
@@ -483,6 +484,16 @@ export function KioskOrderView({ menu, categories, staff }) {
 
   return (
     <div style={kioskStyles.screen}>
+      <button
+        type="button"
+        onClick={() => setSettingsOpen(true)}
+        style={kioskStyles.settingsFloat}
+        aria-label="Kiosk settings"
+      >
+        <Settings size={22} />
+        <span>Settings</span>
+      </button>
+
       <aside style={kioskStyles.catBar}>
         <button onClick={() => setActiveCat('all')}
           style={{ ...kioskStyles.catButton, ...(activeCat === 'all' ? kioskStyles.catActive : {}) }}>
@@ -504,7 +515,9 @@ export function KioskOrderView({ menu, categories, staff }) {
             <div style={kioskStyles.kioskTitle}>Order Now</div>
             <div style={kioskStyles.kioskSub}>Choose items, customize, add tip, then pay now.</div>
           </div>
-          <div style={kioskStyles.kioskBrand}>F</div>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
+            <div style={kioskStyles.kioskBrand}>F</div>
+          </div>
         </div>
         <div style={kioskStyles.productGrid}>
           {visibleMenu.map(p => (
@@ -592,7 +605,234 @@ export function KioskOrderView({ menu, categories, staff }) {
           onComplete={completeKioskOrder}
         />
       )}
+
+      {settingsOpen && (
+        <KioskAdminSettings onClose={() => setSettingsOpen(false)} />
+      )}
     </div>
+  );
+}
+
+function KioskAdminSettings({ onClose }) {
+  const normalizeKioskConfig = (next) => ({
+    ...next,
+    stationId: !next.stationId || next.stationId === 'pos-1' ? 'kiosk-1' : next.stationId,
+  });
+  const [cfg, setCfg] = useState(() => normalizeKioskConfig({ ...orderHubService.config }));
+  const [saved, setSaved] = useState(false);
+  const [hubResult, setHubResult] = useState(null);
+  const [terminalResult, setTerminalResult] = useState(null);
+  const [busy, setBusy] = useState('');
+
+  useEffect(() => {
+    let alive = true;
+    orderHubService.ready.then(() => {
+      if (alive) setCfg(normalizeKioskConfig({ ...orderHubService.config }));
+    });
+    return () => { alive = false; };
+  }, []);
+
+  const kioskPax = {
+    ...(orderHubService.config.kioskPax || {}),
+    ...(cfg.kioskPax || {}),
+  };
+
+  const updateKioskPax = (patch) => {
+    setCfg(prev => ({
+      ...prev,
+      kioskPax: { ...(prev.kioskPax || {}), ...patch },
+    }));
+  };
+
+  const save = async () => {
+    setBusy('save');
+    const next = await orderHubService.updateConfig(cfg);
+    setCfg({ ...next });
+    setSaved(true);
+    setBusy('');
+    setTimeout(() => setSaved(false), 1800);
+  };
+
+  const testHub = async () => {
+    setBusy('hub');
+    await orderHubService.updateConfig(cfg);
+    const res = await orderHubService.ping(cfg);
+    setHubResult(res);
+    setBusy('');
+  };
+
+  const testTerminal = async () => {
+    setBusy('terminal');
+    setTerminalResult(null);
+    const oldPax = { ...paxService.config };
+    try {
+      await orderHubService.updateConfig(cfg);
+      await paxService.updateConfig({
+        ...oldPax,
+        connectionMode: kioskPax.connectionMode || 'tcp',
+        terminalSerial: kioskPax.terminalSerial || '',
+        ip: kioskPax.ip || '',
+        port: Number(kioskPax.port || 10009),
+        timeout: Number(kioskPax.timeout || 60000),
+        tipRequest: kioskPax.tipRequest !== false,
+        usePosLinkSdk: kioskPax.usePosLinkSdk !== false,
+      });
+      setTerminalResult(await paxService.ping());
+    } catch (e) {
+      setTerminalResult({ ok: false, error: e.message || 'Terminal test failed' });
+    } finally {
+      await paxService.updateConfig(oldPax);
+      setBusy('');
+    }
+  };
+
+  return (
+    <Modal onClose={onClose} maxWidth={760}>
+      <div style={{ padding: 26 }}>
+        <ModalClose onClose={onClose} />
+        <div style={{ fontSize: 26, fontWeight: 900, color: C.text }}>Kiosk Settings</div>
+        <div style={{ fontSize: 13, color: C.textMute, fontWeight: 800, marginTop: 6, marginBottom: 18 }}>
+          Connect this kiosk to the main POS and its own PAX terminal.
+        </div>
+
+        <div style={kioskStyles.settingsPanel}>
+          <div style={kioskStyles.settingsTitle}>POS Hub connection</div>
+          <label style={kioskStyles.settingCheck}>
+            <input
+              type="checkbox"
+              checked={!!cfg.enabled}
+              onChange={e => setCfg({ ...cfg, enabled: e.target.checked })}
+            />
+            Enable POS Hub connection
+          </label>
+          <Field label="POS Hub URL" hint="Use main POS IP, for example http://192.168.68.55:8787">
+            <Input
+              value={cfg.hubUrl || ''}
+              placeholder="http://192.168.68.55:8787"
+              onChange={e => setCfg({ ...cfg, hubUrl: e.target.value })}
+            />
+          </Field>
+          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12 }}>
+            <Field label="Store ID">
+              <Input
+                value={cfg.storeId || ''}
+                placeholder="vido-foody"
+                onChange={e => setCfg({ ...cfg, storeId: e.target.value })}
+              />
+            </Field>
+            <Field label="This Kiosk ID">
+              <Input
+                value={cfg.stationId || ''}
+                placeholder="kiosk-1"
+                onChange={e => setCfg({ ...cfg, stationId: e.target.value })}
+              />
+            </Field>
+          </div>
+        </div>
+
+        <div style={kioskStyles.settingsPanel}>
+          <div style={kioskStyles.settingsTitle}>Kiosk PAX terminal</div>
+          <label style={kioskStyles.settingCheck}>
+            <input
+              type="checkbox"
+              checked={kioskPax.enabled !== false}
+              onChange={e => updateKioskPax({ enabled: e.target.checked })}
+            />
+            Enable separate PAX terminal for Pay Now
+          </label>
+          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12 }}>
+            <Field label="Connection">
+              <select
+                value={kioskPax.connectionMode || 'tcp'}
+                onChange={e => updateKioskPax({ connectionMode: e.target.value })}
+                style={kioskStyles.settingsSelect}
+              >
+                <option value="tcp">TCP/IP</option>
+                <option value="usb">USB via POSLink SDK</option>
+                <option value="serial">Serial number</option>
+              </select>
+            </Field>
+            <Field label="PAX terminal IP">
+              <Input
+                value={kioskPax.ip || ''}
+                placeholder="192.168.68.59"
+                disabled={(kioskPax.connectionMode || 'tcp') !== 'tcp'}
+                onChange={e => updateKioskPax({ ip: e.target.value })}
+              />
+            </Field>
+          </div>
+          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12 }}>
+            <Field label="Port" hint="Most PAX BroadPOS terminals use 10009">
+              <Input
+                type="number"
+                value={kioskPax.port || 10009}
+                disabled={(kioskPax.connectionMode || 'tcp') !== 'tcp'}
+                onChange={e => updateKioskPax({ port: Number(e.target.value || 10009) })}
+              />
+            </Field>
+            <Field label="Timeout (ms)" hint="60000 = 60 seconds">
+              <Input
+                type="number"
+                value={kioskPax.timeout || 60000}
+                onChange={e => updateKioskPax({ timeout: Number(e.target.value || 60000) })}
+              />
+            </Field>
+          </div>
+          {(kioskPax.connectionMode || 'tcp') === 'usb' && (
+            <div style={kioskStyles.settingsNote}>
+              USB mode does not use IP or port. Connect the PAX terminal by USB to this Android kiosk,
+              allow Android USB permission, and keep POSLink SDK enabled.
+            </div>
+          )}
+          <Field label="Terminal serial number" hint="Optional. Use only if your PAX setup pairs by serial.">
+            <Input
+              value={kioskPax.terminalSerial || ''}
+              placeholder="Optional"
+              onChange={e => updateKioskPax({ terminalSerial: e.target.value })}
+            />
+          </Field>
+          <label style={kioskStyles.settingCheck}>
+            <input
+              type="checkbox"
+              checked={kioskPax.tipRequest !== false}
+              onChange={e => updateKioskPax({ tipRequest: e.target.checked })}
+            />
+            Show tip on PAX terminal
+          </label>
+          <label style={kioskStyles.settingCheck}>
+            <input
+              type="checkbox"
+              checked={kioskPax.usePosLinkSdk !== false}
+              onChange={e => updateKioskPax({ usePosLinkSdk: e.target.checked })}
+            />
+            Use PAX POSLink SDK in Android build
+          </label>
+        </div>
+
+        <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap' }}>
+          <Button variant="ghost" onClick={testHub} disabled={busy === 'hub' || !cfg.hubUrl}>
+            {busy === 'hub' ? <><RefreshCw size={14} className="spin" /> Testing...</> : 'Test POS Hub'}
+          </Button>
+          <Button variant="ghost" onClick={testTerminal} disabled={busy === 'terminal' || kioskPax.enabled === false}>
+            {busy === 'terminal' ? <><RefreshCw size={14} className="spin" /> Testing...</> : `Test PAX (${(kioskPax.connectionMode || 'tcp').toUpperCase()})`}
+          </Button>
+          <Button onClick={save} disabled={busy === 'save'}>
+            {saved ? <><Check size={14} /> Saved</> : 'Save Settings'}
+          </Button>
+        </div>
+
+        {hubResult && (
+          <div style={{ ...kioskStyles.resultBox, color: hubResult.ok ? C.green : C.red, background: hubResult.ok ? 'rgba(74,222,128,0.12)' : C.redA }}>
+            {hubResult.ok ? `POS Hub connected: ${hubResult.service}` : `POS Hub failed: ${hubResult.error}`}
+          </div>
+        )}
+        {terminalResult && (
+          <div style={{ ...kioskStyles.resultBox, color: terminalResult.ok ? C.green : C.red, background: terminalResult.ok ? 'rgba(74,222,128,0.12)' : C.redA }}>
+            {terminalResult.ok ? `PAX connected${terminalResult.web ? ' (web preview simulated)' : ''}` : `PAX failed: ${terminalResult.error}`}
+          </div>
+        )}
+      </div>
+    </Modal>
   );
 }
 
@@ -2001,6 +2241,7 @@ function Row({ label, value }) {
 // ============================================================================
 const kioskStyles = {
   screen: {
+    position: 'relative',
     display: 'grid',
     gridTemplateColumns: '132px minmax(0, 1fr) minmax(340px, 28vw)',
     gap: 14,
@@ -2050,11 +2291,47 @@ const kioskStyles = {
   kioskHead: { display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 12, marginBottom: 12 },
   kioskTitle: { fontSize: 26, fontWeight: 900, color: C.text },
   kioskSub: { fontSize: 13, fontWeight: 800, color: C.textMute, marginTop: 3 },
+  settingsFloat: {
+    position: 'fixed',
+    top: 14,
+    right: 14,
+    zIndex: 1000,
+    minWidth: 138,
+    height: 54,
+    borderRadius: 14,
+    border: `2px solid ${C.primaryD}`,
+    background: C.primary,
+    color: C.bg,
+    display: 'flex',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 8,
+    fontSize: 16,
+    fontWeight: 900,
+    cursor: 'pointer',
+    boxShadow: `0 4px 0 ${C.primaryD}`,
+  },
   kioskBrand: {
     width: 50, height: 50, borderRadius: 14,
     background: C.primaryG, color: '#fff',
     display: 'flex', alignItems: 'center', justifyContent: 'center',
     fontSize: 30, fontWeight: 900, fontFamily: 'Arial Black, sans-serif',
+  },
+  adminButton: {
+    minWidth: 132,
+    height: 48,
+    borderRadius: 12,
+    border: 'none',
+    background: C.primary,
+    color: C.bg,
+    display: 'flex',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 8,
+    fontSize: 16,
+    fontWeight: 900,
+    cursor: 'pointer',
+    boxShadow: `0 3px 0 ${C.primaryD}`,
   },
   productGrid: { display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(210px, 1fr))', gap: 12 },
   productTile: {
@@ -2138,6 +2415,58 @@ const kioskStyles = {
     borderRadius: 14,
     padding: 16,
     margin: '16px 0',
+  },
+  settingsPanel: {
+    background: C.panel,
+    border: `1px solid ${C.border}`,
+    borderRadius: 14,
+    padding: 16,
+    marginBottom: 14,
+  },
+  settingsTitle: {
+    fontSize: 12,
+    fontWeight: 900,
+    color: C.textMute,
+    textTransform: 'uppercase',
+    letterSpacing: 1,
+    marginBottom: 12,
+  },
+  settingCheck: {
+    display: 'flex',
+    alignItems: 'center',
+    gap: 10,
+    color: C.text,
+    fontSize: 14,
+    fontWeight: 900,
+    marginBottom: 12,
+  },
+  settingsSelect: {
+    width: '100%',
+    padding: '12px 14px',
+    borderRadius: 10,
+    border: `1px solid ${C.border}`,
+    background: C.card,
+    color: C.text,
+    fontFamily: 'inherit',
+    fontWeight: 900,
+    fontSize: 14,
+  },
+  settingsNote: {
+    padding: '10px 12px',
+    borderRadius: 10,
+    marginBottom: 12,
+    background: 'rgba(252, 211, 77, 0.10)',
+    color: C.text,
+    fontSize: 12,
+    fontWeight: 800,
+    lineHeight: 1.5,
+  },
+  resultBox: {
+    marginTop: 12,
+    padding: '10px 14px',
+    borderRadius: 10,
+    fontSize: 13,
+    fontWeight: 900,
   },
   doneScreen: { height: '100%', display: 'grid', placeItems: 'center', background: C.bg, color: C.text, padding: 20 },
   doneCard: { width: 'min(540px, 100%)', background: C.panel, border: `1px solid ${C.border}`, borderRadius: 18, padding: 34, textAlign: 'center' },
