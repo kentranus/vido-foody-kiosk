@@ -13,6 +13,7 @@ import { loadShop, saveShop } from './services/shopStorage';
 import { initOrderCounter } from './services/orderStorage';
 import { startHubPolling } from './services/hubIngest';
 import { orderHubService } from './services/orderHubService';
+import { embeddedHub, LOCAL_HUB_URL } from './services/embeddedHub';
 import { DEFAULT_MENU, DEFAULT_CATEGORIES } from './data/defaultMenu';
 import { APP_VERSION, BUILD_NUMBER } from './version';
 import { PinLockScreen } from './components/Shared';
@@ -55,15 +56,24 @@ export default function App() {
   }, []);
 
   // Background order sync between kiosk(s) and POS.
-  //  - POS app: continuously pull kiosk/online orders from the hub + print tickets.
-  //  - Kiosk app: keep retrying any order that couldn't reach the POS at payment time.
+  //  - POS app: host an in-app hub (so the tablet itself is the switchboard —
+  //    no separate computer needed), then continuously pull kiosk orders + print.
+  //  - Kiosk app: keep retrying any order that couldn't reach the POS.
   useEffect(() => {
     if (IS_KIOSK_APP) {
       const stop = orderHubService.startOutboxAutoFlush(7000);
       return stop;
     }
-    const stop = startHubPolling({ intervalMs: 6000, staffName: 'POS' });
-    return stop;
+    let stopPolling = () => {};
+    (async () => {
+      const hub = await embeddedHub.start();
+      if (hub.running) {
+        // The POS hosts its own hub → it talks to itself on localhost.
+        await orderHubService.updateConfig({ enabled: true, hubUrl: LOCAL_HUB_URL });
+      }
+      stopPolling = startHubPolling({ intervalMs: 6000, staffName: 'POS' });
+    })();
+    return () => { stopPolling(); embeddedHub.stop(); };
   }, []);
 
   const updateShop = async (updates) => {

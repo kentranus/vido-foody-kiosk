@@ -12,6 +12,7 @@ public class MainActivity extends BridgeActivity {
         registerPlugin(CashDrawerPlugin.class);
         registerPlugin(PosLinkPaymentPlugin.class);
         registerPlugin(CustomerDisplayPlugin.class);
+        registerPlugin(EmbeddedHubPlugin.class);
         super.onCreate(savedInstanceState);
     }
 }

@@ -8,6 +8,7 @@ import { paxService, getDebugLog, clearDebugLog, PAX_STATUS } from '../services/
 import { hardwareService } from '../services/hardwareBridge';
 import { customerDisplayService } from '../services/customerDisplayBridge';
 import { orderHubService } from '../services/orderHubService';
+import { embeddedHub, HUB_PORT } from '../services/embeddedHub';
 import { saveMenu, saveCategories, resetMenuToDefaults } from '../services/menuStorage';
 import { loadStaff, addStaff, updateStaff, deleteStaff } from '../services/staffStorage';
 import { APP_VERSION, BUILD_DATE, BUILD_NUMBER, COMMIT_SHORT } from '../version';
@@ -493,6 +494,18 @@ function HubSettings() {
   const [testingTerminal, setTestingTerminal] = useState(false);
   const [result, setResult] = useState(null);
   const [terminalResult, setTerminalResult] = useState(null);
+  const [hub, setHub] = useState({ running: false, supported: false, ip: '', port: HUB_PORT });
+
+  useEffect(() => {
+    let alive = true;
+    const refresh = async () => {
+      const st = await embeddedHub.status();
+      if (alive) setHub(st);
+    };
+    refresh();
+    const t = setInterval(refresh, 4000);
+    return () => { alive = false; clearInterval(t); };
+  }, []);
 
   useEffect(() => {
     let alive = true;
@@ -557,28 +570,54 @@ function HubSettings() {
 
   return (
     <div style={{ maxWidth: 760 }}>
+      {hub.supported && (
+        <div style={{
+          background: hub.running ? 'rgba(74,222,128,0.10)' : C.panel,
+          border: `1px solid ${hub.running ? C.green : C.border}`,
+          padding: 18, borderRadius: 12, marginBottom: 14,
+        }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 13, fontWeight: 900, color: hub.running ? C.green : C.textMute, marginBottom: 8 }}>
+            <span style={{ width: 9, height: 9, borderRadius: 999, background: hub.running ? C.green : C.textMute, display: 'inline-block' }} />
+            {hub.running ? 'This POS is the hub — running' : 'Hub starting…'}
+          </div>
+          <div style={{ fontSize: 13, color: C.textMute, fontWeight: 700, marginBottom: 6 }}>
+            On each kiosk, enter this address as the POS address:
+          </div>
+          <div style={{ fontSize: 26, fontWeight: 900, color: C.text, letterSpacing: 0.5, userSelect: 'all' }}>
+            {hub.ip ? `${hub.ip}:${hub.port}` : 'Connect Wi-Fi to get address'}
+          </div>
+          <div style={{ fontSize: 12, color: C.textMute, fontWeight: 700, marginTop: 8 }}>
+            Kiosks and this POS must be on the same Wi-Fi. Tip: give this tablet a fixed IP in the router so the address never changes.
+          </div>
+        </div>
+      )}
+
       <div style={{ background: C.panel, padding: 18, borderRadius: 12, marginBottom: 14 }}>
         <div style={{ fontSize: 11, fontWeight: 900, color: C.textMute, textTransform: 'uppercase', letterSpacing: 0.5, marginBottom: 12 }}>
-          POS Hub for kiosk and online orders
+          {hub.supported ? 'Advanced — receiving options' : 'POS Hub for kiosk and online orders'}
         </div>
-        <label style={{ display: 'flex', alignItems: 'center', gap: 10, color: C.text, fontSize: 15, fontWeight: 900, marginBottom: 16 }}>
-          <input
-            type="checkbox"
-            checked={!!cfg.enabled}
-            onChange={e => setCfg({ ...cfg, enabled: e.target.checked })}
-          />
-          Enable POS Hub connection
-        </label>
-        <Field
-          label="POS Hub URL"
-          hint="Use the POS/Hub computer IP on the store network, for example http://192.168.68.55:8787"
-        >
-          <Input
-            value={cfg.hubUrl || ''}
-            placeholder="http://192.168.68.55:8787"
-            onChange={e => setCfg({ ...cfg, hubUrl: e.target.value })}
-          />
-        </Field>
+        {!hub.supported && (
+          <>
+            <label style={{ display: 'flex', alignItems: 'center', gap: 10, color: C.text, fontSize: 15, fontWeight: 900, marginBottom: 16 }}>
+              <input
+                type="checkbox"
+                checked={!!cfg.enabled}
+                onChange={e => setCfg({ ...cfg, enabled: e.target.checked })}
+              />
+              Enable POS Hub connection
+            </label>
+            <Field
+              label="POS Hub URL"
+              hint="Only needed if you run the hub on a separate computer instead of this tablet"
+            >
+              <Input
+                value={cfg.hubUrl || ''}
+                placeholder="http://192.168.1.50:8787"
+                onChange={e => setCfg({ ...cfg, hubUrl: e.target.value })}
+              />
+            </Field>
+          </>
+        )}
         <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10 }}>
           <Field label="Store ID">
             <Input value={cfg.storeId || ''} onChange={e => setCfg({ ...cfg, storeId: e.target.value })} />
