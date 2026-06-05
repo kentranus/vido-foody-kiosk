@@ -1,4 +1,4 @@
-name: Build Vido Foody POS APK
+name: Build Vido Foody Kiosk APK
 
 on:
   push:
@@ -10,12 +10,12 @@ permissions:
 
 jobs:
   build-apk:
-    name: Build Android POS APK
+    name: Build Android Kiosk APK
     runs-on: ubuntu-latest
     env:
       FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
-      APP_MODE: pos
-      VITE_APP_MODE: pos
+      APP_MODE: kiosk
+      VITE_APP_MODE: kiosk
     steps:
       - uses: actions/checkout@v6
 
@@ -53,7 +53,7 @@ jobs:
 
       - name: Build web bundle (for APK wrapper)
         working-directory: tablet-app
-        run: VITE_APP_MODE=pos npm run build
+        run: VITE_APP_MODE=kiosk npm run build
 
       - name: Add Android platform
         working-directory: tablet-app
@@ -66,9 +66,10 @@ jobs:
       - name: Install TcpSocket plugin
         working-directory: tablet-app
         run: |
-          PKG_DIR="android/app/src/main/java/com/vido/foody"
+          PKG_DIR="android/app/src/main/java/com/vido/foody/kiosk"
           mkdir -p "$PKG_DIR"
           cp android-plugin/*.java "$PKG_DIR/"
+          sed -i 's/package com.vido.foody;/package com.vido.foody.kiosk;/g' "$PKG_DIR"/*.java
 
       - name: Install POSLink Android SDK
         working-directory: tablet-app
@@ -90,13 +91,13 @@ jobs:
           ./gradlew assembleDebug --stacktrace
 
       - name: Rename APK
-        run: cp tablet-app/android/app/build/outputs/apk/debug/app-debug.apk vido-foody-pos-build-${{ github.run_number }}.apk
+        run: cp tablet-app/android/app/build/outputs/apk/debug/app-debug.apk vido-foody-kiosk-build-${{ github.run_number }}.apk
 
       - name: Upload APK
         uses: actions/upload-artifact@v5
         with:
-          name: vido-foody-pos-apk-build-${{ github.run_number }}
-          path: vido-foody-pos-build-${{ github.run_number }}.apk
+          name: vido-foody-kiosk-apk-build-${{ github.run_number }}
+          path: vido-foody-kiosk-build-${{ github.run_number }}.apk
           retention-days: 30
 
       - name: Upload build logs on failure
