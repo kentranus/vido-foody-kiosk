@@ -10,6 +10,9 @@ import { paxService } from './services/paxBridge';
 import { getCurrentStaff, clearCurrentStaff } from './services/staffStorage';
 import { loadMenu, loadCategories } from './services/menuStorage';
 import { loadShop, saveShop } from './services/shopStorage';
+import { initOrderCounter } from './services/orderStorage';
+import { startHubPolling } from './services/hubIngest';
+import { orderHubService } from './services/orderHubService';
 import { DEFAULT_MENU, DEFAULT_CATEGORIES } from './data/defaultMenu';
 import { APP_VERSION, BUILD_NUMBER } from './version';
 import { PinLockScreen } from './components/Shared';
@@ -46,9 +49,21 @@ export default function App() {
   useEffect(() => { applyTheme(theme); }, [theme]);
 
   useEffect(() => {
-    Promise.all([loadMenu(), loadCategories(), loadShop()]).then(([m, c, s]) => {
+    Promise.all([loadMenu(), loadCategories(), loadShop(), initOrderCounter()]).then(([m, c, s]) => {
       setMenu(m); setCategories(c); setShop(s); setLoading(false);
     });
+  }, []);
+
+  // Background order sync between kiosk(s) and POS.
+  //  - POS app: continuously pull kiosk/online orders from the hub + print tickets.
+  //  - Kiosk app: keep retrying any order that couldn't reach the POS at payment time.
+  useEffect(() => {
+    if (IS_KIOSK_APP) {
+      const stop = orderHubService.startOutboxAutoFlush(7000);
+      return stop;
+    }
+    const stop = startHubPolling({ intervalMs: 6000, staffName: 'POS' });
+    return stop;
   }, []);
 
   const updateShop = async (updates) => {

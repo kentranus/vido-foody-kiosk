@@ -8,6 +8,34 @@ import { getJSON, setJSON } from './storage';
 const KEY = 'vido_orders';
 const MAX_ORDERS = 10000;
 
+// ============================================================================
+// PERSISTENT ORDER NUMBER COUNTER
+// Survives app restarts so receipt/kitchen numbers don't collide each session.
+// Per-device (each POS/kiosk tablet keeps its own sequence). The POS Hub also
+// assigns its own shared number for kiosk/online orders.
+// ============================================================================
+const COUNTER_KEY = 'vido_order_counter';
+let _seed = 1042;
+let _seedLoaded = false;
+
+/** Load the saved counter into memory. Call once at app boot BEFORE first order. */
+export async function initOrderCounter() {
+  const v = await getJSON(COUNTER_KEY, 1042);
+  _seed = Number(v) || 1042;
+  _seedLoaded = true;
+  return _seed;
+}
+
+/** Next order number. Increments + persists (fire-and-forget). */
+export function nextOrderNumber() {
+  _seed += 1;
+  // Persist without blocking; safe even if init hasn't finished (defaults to 1042).
+  setJSON(COUNTER_KEY, _seed).catch(() => {});
+  return _seed;
+}
+
+export function isOrderCounterReady() { return _seedLoaded; }
+
 export async function saveOrder(order) {
   const all = await loadAllOrders();
   const stored = {

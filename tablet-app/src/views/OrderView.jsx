@@ -1,14 +1,14 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import {
   Plus, Minus, Search, Tag, FileText, DollarSign, CreditCard, Smartphone,
-  ArrowLeft, X, Check, AlertCircle, RefreshCw, Archive, Settings,
+  ArrowLeft, X, Check, AlertCircle, RefreshCw, Archive, Settings, Wifi,
 } from 'lucide-react';
 import { C } from '../theme';
 import { SHOP, ORDER_TYPES, formatUSD, formatTime } from '../config';
 import { paxService, PAX_STATUS } from '../services/paxBridge';
 import { hardwareService } from '../services/hardwareBridge';
 import { customerDisplayService } from '../services/customerDisplayBridge';
-import { saveOrder } from '../services/orderStorage';
+import { saveOrder, nextOrderNumber } from '../services/orderStorage';
 import { orderHubService } from '../services/orderHubService';
 import { Modal, ModalClose, PinLockScreen, Button, Input, Field } from '../components/Shared';
 import { useShop } from '../App';
@@ -16,9 +16,6 @@ import { useShop } from '../App';
 // ============================================================================
 // HELPERS
 // ============================================================================
-let _orderCounter = 1042;
-function nextOrderNumber() { return ++_orderCounter; }
-
 function emptyOrder() {
   return {
     id: 'O' + Date.now(),
@@ -377,6 +374,19 @@ export function KioskOrderView({ menu, categories, staff }) {
   const [payOpen, setPayOpen] = useState(false);
   const [doneOrder, setDoneOrder] = useState(null);
   const [settingsOpen, setSettingsOpen] = useState(false);
+  const [adminPinOpen, setAdminPinOpen] = useState(false);
+  const tapRef = useRef({ count: 0, t: 0 });
+
+  // Hidden admin entry: tap the top-left corner 5x within 3s, then enter the
+  // Manager PIN. Customers never see a Settings button.
+  const handleSecretTap = () => {
+    const now = Date.now();
+    const r = tapRef.current;
+    if (now - r.t > 3000) r.count = 0;
+    r.count += 1;
+    r.t = now;
+    if (r.count >= 5) { r.count = 0; setAdminPinOpen(true); }
+  };
 
   const visibleMenu = menu.filter(m => {
     if (m.isAddon) return false;
@@ -440,20 +450,37 @@ export function KioskOrderView({ menu, categories, staff }) {
         category: menu.find(m => m.id === line.productId)?.category || line.category,
       })),
     };
+
+    const hubEnabled = !!orderHubService.config.enabled;
     let finalOrder = localOrder;
-    try {
-      const hubResult = await orderHubService.submitOrder(
+    let hubDelivered = false;
+    let hubPending = false;
+
+    if (hubEnabled) {
+      // Try to send to the POS now; if the POS is briefly offline the order is
+      // queued and auto-retried, so a paid order is never lost.
+      const submit = await orderHubService.submitOrderReliable(
         { ...localOrder, status: 'paid' },
         { source: 'kiosk' },
       );
-      if (hubResult?.ok && hubResult.order) {
-        finalOrder = { ...localOrder, ...hubResult.order, status: 'complete' };
+      if (submit.ok && submit.order) {
+        finalOrder = { ...localOrder, ...submit.order, status: 'complete' };
+        hubDelivered = true;
+      } else {
+        hubPending = true;
       }
-    } catch (e) {
-      console.warn('Kiosk order hub submit failed, saving locally:', e);
     }
+
+    finalOrder = { ...finalOrder, hubDelivered, hubPending };
     await saveOrder(finalOrder);
-    await printKitchenTicket(finalOrder).catch(e => console.warn('Kiosk ticket failed:', e));
+
+    // Print the kitchen ticket at the kiosk ONLY when it is running standalone
+    // (no POS Hub). When the hub is on, the POS prints the ticket — printing
+    // here too would duplicate it.
+    if (!hubEnabled) {
+      await printKitchenTicket(finalOrder).catch(e => console.warn('Kiosk ticket failed:', e));
+    }
+
     await customerDisplayService
       .update(customerDisplayService.donePayload({ total: freshTotals.total + (payInfo.tip || 0) }, shop))
       .catch(e => console.warn('Kiosk done display failed:', e));
@@ -468,13 +495,18 @@ export function KioskOrderView({ menu, categories, staff }) {
   };
 
   if (doneOrder) {
+    const deliveryText = doneOrder.hubDelivered
+      ? 'Your ticket was sent to the counter.'
+      : doneOrder.hubPending
+        ? 'Saved — reconnecting to the counter, your ticket will arrive shortly.'
+        : 'Your drink ticket was sent to the counter.';
     return (
       <div style={kioskStyles.doneScreen}>
         <div style={kioskStyles.doneCard}>
           <div style={kioskStyles.doneCheck}>✓</div>
           <div style={kioskStyles.doneTitle}>Order received</div>
           <div style={kioskStyles.doneNumber}>#{doneOrder.number}</div>
-          <div style={kioskStyles.doneText}>Your drink ticket was sent to the counter.</div>
+          <div style={kioskStyles.doneText}>{deliveryText}</div>
           {doneOrder.receiptPhone && <div style={kioskStyles.doneText}>Receipt phone: {doneOrder.receiptPhone}</div>}
           <Button size="lg" onClick={resetKiosk} style={{ marginTop: 24, minWidth: 220 }}>New Order</Button>
         </div>
@@ -484,15 +516,12 @@ export function KioskOrderView({ menu, categories, staff }) {
 
   return (
     <div style={kioskStyles.screen}>
-      <button
-        type="button"
-        onClick={() => setSettingsOpen(true)}
-        style={kioskStyles.settingsFloat}
-        aria-label="Kiosk settings"
-      >
-        <Settings size={22} />
-        <span>Settings</span>
-      </button>
+      {/* Hidden admin hotspot — invisible to customers. 5 taps → Manager PIN. */}
+      <div
+        onClick={handleSecretTap}
+        style={kioskStyles.adminHotspot}
+        aria-hidden="true"
+      />
 
       <aside style={kioskStyles.catBar}>
         <button onClick={() => setActiveCat('all')}
@@ -606,6 +635,17 @@ export function KioskOrderView({ menu, categories, staff }) {
         />
       )}
 
+      {adminPinOpen && (
+        <PinLockScreen
+          managerOnly
+          fullScreen={false}
+          title="Manager access"
+          subtitle="Enter Manager PIN to open kiosk settings"
+          onUnlock={() => { setAdminPinOpen(false); setSettingsOpen(true); }}
+          onCancel={() => setAdminPinOpen(false)}
+        />
+      )}
+
       {settingsOpen && (
         <KioskAdminSettings onClose={() => setSettingsOpen(false)} />
       )}
@@ -623,11 +663,24 @@ function KioskAdminSettings({ onClose }) {
   const [hubResult, setHubResult] = useState(null);
   const [terminalResult, setTerminalResult] = useState(null);
   const [busy, setBusy] = useState('');
+  const [advanced, setAdvanced] = useState(false);
+  const [liveStatus, setLiveStatus] = useState({ state: 'checking', text: 'Checking connection…' });
 
   useEffect(() => {
     let alive = true;
-    orderHubService.ready.then(() => {
-      if (alive) setCfg(normalizeKioskConfig({ ...orderHubService.config }));
+    orderHubService.ready.then(async () => {
+      if (!alive) return;
+      const loaded = normalizeKioskConfig({ ...orderHubService.config });
+      setCfg(loaded);
+      // Auto-check connection on open so staff see status without tapping anything.
+      if (loaded.enabled && loaded.hubUrl) {
+        const res = await orderHubService.ping(loaded);
+        if (alive) setLiveStatus(res.ok
+          ? { state: 'ok', text: `Connected to POS (${res.service || 'hub'})` }
+          : { state: 'fail', text: `Not connected: ${res.error || 'POS offline'}` });
+      } else if (alive) {
+        setLiveStatus({ state: 'off', text: 'Not linked to a POS yet' });
+      }
     });
     return () => { alive = false; };
   }, []);
@@ -661,6 +714,20 @@ function KioskAdminSettings({ onClose }) {
     setBusy('');
   };
 
+  // One-tap: turn on the hub link, save, and check it — the simple path.
+  const connectHub = async () => {
+    setBusy('hub');
+    const next = { ...cfg, enabled: true };
+    setCfg(next);
+    await orderHubService.updateConfig(next);
+    const res = await orderHubService.ping(next);
+    setHubResult(res);
+    setLiveStatus(res.ok
+      ? { state: 'ok', text: `Connected to POS (${res.service || 'hub'})` }
+      : { state: 'fail', text: `Not connected: ${res.error || 'POS offline'}` });
+    setBusy('');
+  };
+
   const testTerminal = async () => {
     setBusy('terminal');
     setTerminalResult(null);
@@ -686,151 +753,159 @@ function KioskAdminSettings({ onClose }) {
     }
   };
 
+  const statusColor = liveStatus.state === 'ok' ? C.green
+    : liveStatus.state === 'fail' ? C.red : C.textMute;
+  const statusBg = liveStatus.state === 'ok' ? 'rgba(74,222,128,0.12)'
+    : liveStatus.state === 'fail' ? C.redA : C.card;
+
   return (
-    <Modal onClose={onClose} maxWidth={760}>
+    <Modal onClose={onClose} maxWidth={620}>
       <div style={{ padding: 26 }}>
         <ModalClose onClose={onClose} />
-        <div style={{ fontSize: 26, fontWeight: 900, color: C.text }}>Kiosk Settings</div>
-        <div style={{ fontSize: 13, color: C.textMute, fontWeight: 800, marginTop: 6, marginBottom: 18 }}>
-          Connect this kiosk to the main POS and its own PAX terminal.
+        <div style={{ fontSize: 26, fontWeight: 900, color: C.text }}>Kiosk Setup</div>
+        <div style={{ fontSize: 13, color: C.textMute, fontWeight: 800, marginTop: 6, marginBottom: 16 }}>
+          Two things to set: the POS to send orders to, and the card terminal.
         </div>
 
+        {/* LIVE STATUS BANNER */}
+        <div style={{
+          display: 'flex', alignItems: 'center', gap: 10,
+          padding: '12px 14px', borderRadius: 12, marginBottom: 18,
+          background: statusBg, color: statusColor, fontWeight: 800, fontSize: 14,
+        }}>
+          {liveStatus.state === 'checking'
+            ? <RefreshCw size={16} className="spin" />
+            : liveStatus.state === 'ok' ? <Check size={16} /> : <AlertCircle size={16} />}
+          {liveStatus.text}
+        </div>
+
+        {/* STEP 1 — POS */}
         <div style={kioskStyles.settingsPanel}>
-          <div style={kioskStyles.settingsTitle}>POS Hub connection</div>
-          <label style={kioskStyles.settingCheck}>
-            <input
-              type="checkbox"
-              checked={!!cfg.enabled}
-              onChange={e => setCfg({ ...cfg, enabled: e.target.checked })}
-            />
-            Enable POS Hub connection
-          </label>
-          <Field label="POS Hub URL" hint="Use main POS IP, for example http://192.168.68.55:8787">
+          <div style={kioskStyles.settingsTitle}>1 · Connect to POS</div>
+          <Field label="POS address" hint="The POS device's Wi-Fi IP, then :8787 — e.g. http://192.168.1.50:8787">
             <Input
               value={cfg.hubUrl || ''}
-              placeholder="http://192.168.68.55:8787"
+              placeholder="http://192.168.1.50:8787"
               onChange={e => setCfg({ ...cfg, hubUrl: e.target.value })}
             />
           </Field>
-          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12 }}>
-            <Field label="Store ID">
-              <Input
-                value={cfg.storeId || ''}
-                placeholder="vido-foody"
-                onChange={e => setCfg({ ...cfg, storeId: e.target.value })}
-              />
-            </Field>
-            <Field label="This Kiosk ID">
-              <Input
-                value={cfg.stationId || ''}
-                placeholder="kiosk-1"
-                onChange={e => setCfg({ ...cfg, stationId: e.target.value })}
-              />
-            </Field>
-          </div>
+          <Button onClick={connectHub} disabled={busy === 'hub' || !cfg.hubUrl} style={{ width: '100%' }}>
+            {busy === 'hub'
+              ? <><RefreshCw size={16} className="spin" /> Connecting…</>
+              : <><Wifi size={16} /> Connect &amp; Test</>}
+          </Button>
         </div>
 
+        {/* STEP 2 — TERMINAL */}
         <div style={kioskStyles.settingsPanel}>
-          <div style={kioskStyles.settingsTitle}>Kiosk PAX terminal</div>
-          <label style={kioskStyles.settingCheck}>
-            <input
-              type="checkbox"
-              checked={kioskPax.enabled !== false}
-              onChange={e => updateKioskPax({ enabled: e.target.checked })}
-            />
-            Enable separate PAX terminal for Pay Now
-          </label>
-          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12 }}>
-            <Field label="Connection">
-              <select
-                value={kioskPax.connectionMode || 'tcp'}
-                onChange={e => updateKioskPax({ connectionMode: e.target.value })}
-                style={kioskStyles.settingsSelect}
-              >
-                <option value="tcp">TCP/IP</option>
-                <option value="usb">USB via POSLink SDK</option>
-                <option value="serial">Serial number</option>
-              </select>
-            </Field>
-            <Field label="PAX terminal IP">
+          <div style={kioskStyles.settingsTitle}>2 · Card terminal</div>
+          {(kioskPax.connectionMode || 'tcp') === 'tcp' ? (
+            <Field label="Terminal IP" hint="Shown on the PAX/BroadPOS screen">
               <Input
                 value={kioskPax.ip || ''}
-                placeholder="192.168.68.59"
-                disabled={(kioskPax.connectionMode || 'tcp') !== 'tcp'}
+                placeholder="192.168.1.59"
                 onChange={e => updateKioskPax({ ip: e.target.value })}
               />
             </Field>
-          </div>
-          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12 }}>
-            <Field label="Port" hint="Most PAX BroadPOS terminals use 10009">
-              <Input
-                type="number"
-                value={kioskPax.port || 10009}
-                disabled={(kioskPax.connectionMode || 'tcp') !== 'tcp'}
-                onChange={e => updateKioskPax({ port: Number(e.target.value || 10009) })}
-              />
-            </Field>
-            <Field label="Timeout (ms)" hint="60000 = 60 seconds">
-              <Input
-                type="number"
-                value={kioskPax.timeout || 60000}
-                onChange={e => updateKioskPax({ timeout: Number(e.target.value || 60000) })}
-              />
-            </Field>
-          </div>
-          {(kioskPax.connectionMode || 'tcp') === 'usb' && (
+          ) : (
             <div style={kioskStyles.settingsNote}>
-              USB mode does not use IP or port. Connect the PAX terminal by USB to this Android kiosk,
-              allow Android USB permission, and keep POSLink SDK enabled.
+              {(kioskPax.connectionMode || 'tcp') === 'usb'
+                ? 'USB mode: plug the PAX terminal into this kiosk by USB and allow the Android permission.'
+                : 'Serial mode: terminal is paired by serial number (set under Advanced).'}
             </div>
           )}
-          <Field label="Terminal serial number" hint="Optional. Use only if your PAX setup pairs by serial.">
-            <Input
-              value={kioskPax.terminalSerial || ''}
-              placeholder="Optional"
-              onChange={e => updateKioskPax({ terminalSerial: e.target.value })}
-            />
-          </Field>
-          <label style={kioskStyles.settingCheck}>
-            <input
-              type="checkbox"
-              checked={kioskPax.tipRequest !== false}
-              onChange={e => updateKioskPax({ tipRequest: e.target.checked })}
-            />
-            Show tip on PAX terminal
-          </label>
-          <label style={kioskStyles.settingCheck}>
-            <input
-              type="checkbox"
-              checked={kioskPax.usePosLinkSdk !== false}
-              onChange={e => updateKioskPax({ usePosLinkSdk: e.target.checked })}
-            />
-            Use PAX POSLink SDK in Android build
-          </label>
-        </div>
-
-        <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap' }}>
-          <Button variant="ghost" onClick={testHub} disabled={busy === 'hub' || !cfg.hubUrl}>
-            {busy === 'hub' ? <><RefreshCw size={14} className="spin" /> Testing...</> : 'Test POS Hub'}
-          </Button>
-          <Button variant="ghost" onClick={testTerminal} disabled={busy === 'terminal' || kioskPax.enabled === false}>
-            {busy === 'terminal' ? <><RefreshCw size={14} className="spin" /> Testing...</> : `Test PAX (${(kioskPax.connectionMode || 'tcp').toUpperCase()})`}
-          </Button>
-          <Button onClick={save} disabled={busy === 'save'}>
-            {saved ? <><Check size={14} /> Saved</> : 'Save Settings'}
+          <Button variant="ghost" onClick={testTerminal} disabled={busy === 'terminal' || kioskPax.enabled === false} style={{ width: '100%' }}>
+            {busy === 'terminal' ? <><RefreshCw size={16} className="spin" /> Testing…</> : <><CreditCard size={16} /> Test terminal</>}
           </Button>
         </div>
 
-        {hubResult && (
-          <div style={{ ...kioskStyles.resultBox, color: hubResult.ok ? C.green : C.red, background: hubResult.ok ? 'rgba(74,222,128,0.12)' : C.redA }}>
-            {hubResult.ok ? `POS Hub connected: ${hubResult.service}` : `POS Hub failed: ${hubResult.error}`}
+        {hubResult && !hubResult.ok && (
+          <div style={{ ...kioskStyles.resultBox, color: C.red, background: C.redA }}>
+            POS not reachable: {hubResult.error}. Check that the POS app is open and on the same Wi-Fi.
           </div>
         )}
         {terminalResult && (
           <div style={{ ...kioskStyles.resultBox, color: terminalResult.ok ? C.green : C.red, background: terminalResult.ok ? 'rgba(74,222,128,0.12)' : C.redA }}>
-            {terminalResult.ok ? `PAX connected${terminalResult.web ? ' (web preview simulated)' : ''}` : `PAX failed: ${terminalResult.error}`}
+            {terminalResult.ok ? `Terminal connected${terminalResult.web ? ' (web preview simulated)' : ''}` : `Terminal failed: ${terminalResult.error}`}
           </div>
         )}
+
+        {/* ADVANCED (hidden by default) */}
+        <button type="button" onClick={() => setAdvanced(a => !a)} style={kioskStyles.advancedToggle}>
+          <Settings size={14} /> {advanced ? 'Hide advanced' : 'Advanced settings'}
+        </button>
+
+        {advanced && (
+          <>
+            <div style={kioskStyles.settingsPanel}>
+              <div style={kioskStyles.settingsTitle}>POS Hub — advanced</div>
+              <label style={kioskStyles.settingCheck}>
+                <input type="checkbox" checked={!!cfg.enabled}
+                  onChange={e => setCfg({ ...cfg, enabled: e.target.checked })} />
+                Send orders to POS Hub
+              </label>
+              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12 }}>
+                <Field label="Store ID" hint="Must match the POS">
+                  <Input value={cfg.storeId || ''} placeholder="vido-foody"
+                    onChange={e => setCfg({ ...cfg, storeId: e.target.value })} />
+                </Field>
+                <Field label="This Kiosk ID">
+                  <Input value={cfg.stationId || ''} placeholder="kiosk-1"
+                    onChange={e => setCfg({ ...cfg, stationId: e.target.value })} />
+                </Field>
+              </div>
+            </div>
+
+            <div style={kioskStyles.settingsPanel}>
+              <div style={kioskStyles.settingsTitle}>Card terminal — advanced</div>
+              <label style={kioskStyles.settingCheck}>
+                <input type="checkbox" checked={kioskPax.enabled !== false}
+                  onChange={e => updateKioskPax({ enabled: e.target.checked })} />
+                Use a separate PAX terminal for Pay Now
+              </label>
+              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12 }}>
+                <Field label="Connection">
+                  <select value={kioskPax.connectionMode || 'tcp'}
+                    onChange={e => updateKioskPax({ connectionMode: e.target.value })}
+                    style={kioskStyles.settingsSelect}>
+                    <option value="tcp">TCP/IP</option>
+                    <option value="usb">USB via POSLink SDK</option>
+                    <option value="serial">Serial number</option>
+                  </select>
+                </Field>
+                <Field label="Port" hint="BroadPOS default 10009">
+                  <Input type="number" value={kioskPax.port || 10009}
+                    disabled={(kioskPax.connectionMode || 'tcp') !== 'tcp'}
+                    onChange={e => updateKioskPax({ port: Number(e.target.value || 10009) })} />
+                </Field>
+              </div>
+              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12 }}>
+                <Field label="Timeout (ms)" hint="60000 = 60s">
+                  <Input type="number" value={kioskPax.timeout || 60000}
+                    onChange={e => updateKioskPax({ timeout: Number(e.target.value || 60000) })} />
+                </Field>
+                <Field label="Terminal serial" hint="Optional">
+                  <Input value={kioskPax.terminalSerial || ''} placeholder="Optional"
+                    onChange={e => updateKioskPax({ terminalSerial: e.target.value })} />
+                </Field>
+              </div>
+              <label style={kioskStyles.settingCheck}>
+                <input type="checkbox" checked={kioskPax.tipRequest !== false}
+                  onChange={e => updateKioskPax({ tipRequest: e.target.checked })} />
+                Show tip on PAX terminal
+              </label>
+              <label style={kioskStyles.settingCheck}>
+                <input type="checkbox" checked={kioskPax.usePosLinkSdk !== false}
+                  onChange={e => updateKioskPax({ usePosLinkSdk: e.target.checked })} />
+                Use PAX POSLink SDK in Android build
+              </label>
+            </div>
+          </>
+        )}
+
+        <Button onClick={save} disabled={busy === 'save'} style={{ width: '100%', marginTop: 4 }}>
+          {saved ? <><Check size={16} /> Saved</> : 'Save'}
+        </Button>
       </div>
     </Modal>
   );
@@ -1262,6 +1337,28 @@ function KioskPaymentModal({ order, onClose, onComplete }) {
   const [status, setStatus] = useState(PAX_STATUS.IDLE);
   const [result, setResult] = useState(null);
   const [receiptPhone, setReceiptPhone] = useState('');
+  const [finishing, setFinishing] = useState(false);
+
+  const finish = async () => {
+    if (finishing) return;
+    setFinishing(true);
+    try {
+      await onComplete({
+        method: 'card',
+        tip: tipAmount,
+        receiptPhone,
+        cardLast4: result.cardLast4,
+        cardType: result.cardType,
+        authCode: result.authCode,
+        paxRefNum: result.refNum,
+        paxResponseCode: result.responseCode,
+        paxRaw: result.raw,
+      });
+    } catch (e) {
+      console.warn('Kiosk finish failed:', e);
+      setFinishing(false);
+    }
+  };
 
   const tipAmount = customTip !== '' ? (parseFloat(customTip) || 0) : tip;
   const totalWithTip = totals.total + tipAmount;
@@ -1397,18 +1494,8 @@ function KioskPaymentModal({ order, onClose, onComplete }) {
                 onChange={e => setReceiptPhone(e.target.value)}
               />
             </Field>
-            <Button onClick={() => onComplete({
-              method: 'card',
-              tip: tipAmount,
-              receiptPhone,
-              cardLast4: result.cardLast4,
-              cardType: result.cardType,
-              authCode: result.authCode,
-              paxRefNum: result.refNum,
-              paxResponseCode: result.responseCode,
-              paxRaw: result.raw,
-            })} style={{ width: '100%' }}>
-              Show Order Number
+            <Button onClick={finish} disabled={finishing} style={{ width: '100%' }}>
+              {finishing ? 'Sending…' : 'Show Order Number'}
             </Button>
           </>
         )}
@@ -2291,6 +2378,16 @@ const kioskStyles = {
   kioskHead: { display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 12, marginBottom: 12 },
   kioskTitle: { fontSize: 26, fontWeight: 900, color: C.text },
   kioskSub: { fontSize: 13, fontWeight: 800, color: C.textMute, marginTop: 3 },
+  adminHotspot: {
+    position: 'fixed',
+    top: 0,
+    left: 0,
+    width: 70,
+    height: 70,
+    zIndex: 1000,
+    background: 'transparent',
+    cursor: 'default',
+  },
   settingsFloat: {
     position: 'fixed',
     top: 14,
@@ -2467,6 +2564,12 @@ const kioskStyles = {
     borderRadius: 10,
     fontSize: 13,
     fontWeight: 900,
+  },
+  advancedToggle: {
+    display: 'flex', alignItems: 'center', gap: 8,
+    background: 'transparent', border: 'none', color: C.textMute,
+    fontWeight: 800, fontSize: 13, cursor: 'pointer',
+    padding: '10px 2px', marginBottom: 4,
   },
   doneScreen: { height: '100%', display: 'grid', placeItems: 'center', background: C.bg, color: C.text, padding: 20 },
   doneCard: { width: 'min(540px, 100%)', background: C.panel, border: `1px solid ${C.border}`, borderRadius: 18, padding: 34, textAlign: 'center' },

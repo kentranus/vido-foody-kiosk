@@ -11,6 +11,7 @@ import { paxService } from '../services/paxBridge';
 import { hardwareService } from '../services/hardwareBridge';
 import { customerDisplayService } from '../services/customerDisplayBridge';
 import { orderHubService } from '../services/orderHubService';
+import { ingestHubOrders } from '../services/hubIngest';
 import { printKitchenTicket } from './OrderView';
 import { Button, Field, Input, Modal, ModalClose } from '../components/Shared';
 
@@ -60,41 +61,7 @@ export function OperationsView({ staff }) {
   };
 
   const syncHubOrders = async () => {
-    await orderHubService.ready;
-    if (!orderHubService.config.enabled) {
-      return { enabled: false, online: false, imported: 0, message: 'Order Hub is off' };
-    }
-    try {
-      const res = await orderHubService.fetchOrders({ status: 'paid' });
-      const localOrders = await loadAllOrders();
-      const localIds = new Set(localOrders.map(o => o.hubId || o.id));
-      let imported = 0;
-      for (const order of res.orders || []) {
-        if (!localIds.has(order.hubId || order.id)) {
-          const stored = {
-            ...order,
-            id: order.id || order.hubId,
-            status: 'complete',
-            source: order.source || 'kiosk',
-            completedAt: order.completedAt || new Date().toISOString(),
-          };
-          await saveOrder(stored);
-          imported += 1;
-          if (orderHubService.config.autoPrintKitchenTickets) {
-            await printKitchenTicket(stored).catch(e => console.warn('Hub ticket print failed:', e));
-          }
-        }
-        if (orderHubService.config.autoAcceptKioskOrders) {
-          await orderHubService.updateOrderStatus(order.hubId || order.id, 'accepted', {
-            acceptedAt: new Date().toISOString(),
-            acceptedBy: staff?.name || 'POS',
-          }).catch(e => console.warn('Hub accept failed:', e));
-        }
-      }
-      return { enabled: true, online: true, imported, message: `${imported} new kiosk/online order(s)` };
-    } catch (e) {
-      return { enabled: true, online: false, imported: 0, message: e.message || 'Order Hub offline' };
-    }
+    return ingestHubOrders(staff?.name || 'POS');
   };
 
   return (

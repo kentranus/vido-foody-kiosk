@@ -1,6 +1,7 @@
 import { getJSON, setJSON } from './storage';
 
 const CONFIG_KEY = 'vido_order_hub_config';
+const OUTBOX_KEY = 'vido_hub_outbox';
 
 const DEFAULT_CONFIG = {
   enabled: false,
@@ -121,6 +122,73 @@ class OrderHubService {
       body: JSON.stringify({ status, ...updates }),
       timeout: 8000,
     });
+  }
+
+  // ==========================================================================
+  // RELIABLE SUBMIT + OUTBOX
+  // A kiosk must never lose a paid order if the POS Hub is briefly offline.
+  // submitOrderReliable() tries once; on failure it queues the order to a
+  // persisted outbox and flushOutbox() keeps retrying until the POS receives it.
+  // Returns: { ok, order?, pending?, error? }
+  // ==========================================================================
+  async submitOrderReliable(order, extra = {}) {
+    await this.ready;
+    if (!this.config.enabled) {
+      return { ok: false, skipped: true, pending: false, order };
+    }
+    try {
+      const res = await this.submitOrder(order, extra);
+      if (res?.ok) return { ok: true, order: res.order, pending: false };
+      await this._enqueue(order, extra);
+      return { ok: false, pending: true, order, error: res?.error || 'Hub rejected order' };
+    } catch (e) {
+      await this._enqueue(order, extra);
+      return { ok: false, pending: true, order, error: e.message || 'Hub offline' };
+    }
+  }
+
+  async _enqueue(order, extra = {}) {
+    const box = await getJSON(OUTBOX_KEY, []);
+    // De-dupe by local id so retries/double-taps don't pile up.
+    if (!box.some(e => (e.order?.id || '') === (order.id || '__none__'))) {
+      box.push({ order, extra, queuedAt: new Date().toISOString() });
+      await setJSON(OUTBOX_KEY, box);
+    }
+  }
+
+  async pendingCount() {
+    const box = await getJSON(OUTBOX_KEY, []);
+    return box.length;
+  }
+
+  /** Try to send every queued order to the POS Hub. Safe to call on a timer. */
+  async flushOutbox() {
+    await this.ready;
+    if (!this.config.enabled) return { sent: 0, remaining: 0 };
+    let box = await getJSON(OUTBOX_KEY, []);
+    if (!box.length) return { sent: 0, remaining: 0 };
+    let sent = 0;
+    const keep = [];
+    for (const entry of box) {
+      try {
+        const res = await this.submitOrder(entry.order, entry.extra || {});
+        if (res?.ok) { sent += 1; continue; }
+        keep.push(entry);
+      } catch {
+        keep.push(entry);
+      }
+    }
+    await setJSON(OUTBOX_KEY, keep);
+    return { sent, remaining: keep.length };
+  }
+
+  /** Start a background loop (kiosk side) that drains the outbox. Returns a stop fn. */
+  startOutboxAutoFlush(intervalMs = 7000) {
+    if (this._flushTimer) clearInterval(this._flushTimer);
+    const tick = () => { this.flushOutbox().catch(() => {}); };
+    tick();
+    this._flushTimer = setInterval(tick, intervalMs);
+    return () => { clearInterval(this._flushTimer); this._flushTimer = null; };
   }
 }
 
